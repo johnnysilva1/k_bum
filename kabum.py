@@ -6,6 +6,8 @@ import time
 import sqlite3
 import os
 import sys
+import json
+import re
 
 
 #CREATE TABLE precoProduto (dataUNIX INTEGER,  valor INTEGER, idProduto   INTEGER NOT NULL,  FOREIGN KEY (idProduto)  REFERENCES produto (idProduto));
@@ -102,7 +104,7 @@ links = ("https://www.kabum.com.br/hardware/ssd-2-5?pagina=",
 		 "https://www.kabum.com.br/celular-telefone/smartphones?pagina=")#lembrar de por a ?pagina= ao final do nome
 num = 1 #1
 num_lista = 0 #0
-delay = 15 #tempo minimo entre requisicoes, em segs
+delay = 30 #tempo minimo entre requisicoes, em segs
 cont_erros = 0
 hora=int(time.time())-10800#hora ja -3
 listaDadosParaDB = []
@@ -111,6 +113,11 @@ listaDadosParaDB = []
 while True:
 
 	#link = "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=" 
+
+	if num_lista > len(links)-1:#se chegou ao final da lista de links termina programa 
+		exit()
+
+
 	link = links[num_lista] + str(num) + "&ordem=5&limite=100"
 
 	while True:
@@ -125,75 +132,89 @@ while True:
 
 
 	soup = BeautifulSoup(r.text, 'html.parser')
+	listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
+	script = listaComScripts[19] #escolhe o 19a script
+	m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
+	listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
 
-	section = soup.findAll("section", {"class": "listagem-box"})
+	# #listaProdutos.keys()
+	# avaliacao_nota
+	# disponibilidade
+	# is_openbox
+	# preco_desconto
+	# preco
+	# alt
+	# img
+	# nome
+	# link_descricao
+	# menu
+	# oferta
+	# preco_prime
+	# tem_frete_gratis
+	# brinde
+	# preco_antigo
+	# fabricante
+	# is_marketplace
+	# frete_gratis_somente_prime
+	# botao_marketplace
+	# preco_desconto_prime
+	# codigo
+	# avaliacao_numero
 
+	# avaliacao_nota = _['avaliacao_nota']
+	# disponibilidade = _['disponibilidade']
+	# is_openbox = _['is_openbox']
+	# preco_desconto = _['preco_desconto']
+	# preco = _['preco']
+	# alt = _['alt']
+	# img = _['img']
+	# nome = _['nome']
+	# link_descricao = _['link_descricao']
+	# menu = _['menu']
+	# oferta = _['oferta']
+	# preco_prime = _['preco_prime']
+	# tem_frete_gratis = _['tem_frete_gratis']
+	# brinde = _['brinde']
+	# preco_antigo = _['preco_antigo']
+	# fabricante = _['fabricante']
+	# is_marketplace = _['is_marketplace']
+	# frete_gratis_somente_prime = _['frete_gratis_somente_prime']
+	# botao_marketplace = _['botao_marketplace']
+	# preco_desconto_prime = _['preco_desconto_prime']
+	# codigo = _['codigo']
+	# avaliacao_numero = _['avaliacao_numero']
+
+	#avaliacao_nota, disponibilidade, is_openbox, preco_desconto, preco, alt, img, nome, link_descricao, menu, oferta, preco_prime, 
+	#tem_frete_gratis, brinde, preco_antigo, fabricante, is_marketplace, frete_gratis_somente_prime, botao_marketplace, preco_desconto_prime, codigo, avaliacao_numero,
 	#print section[0]
 
-	if len(section) == 0:#caso tenha chegado ao final da pagina, passa para proxima categoria
-		num = 1
-
-		if num_lista+1 <= len(links)-1: 
-			num_lista += 1
-			link = links[num_lista] + str(num) + "&ordem=5&limite=100"
-			print "tira " + link
-
-		else:
-			num_lista = 0
-			link = links[num_lista] + str(num) + "&ordem=5&limite=100"
-			print "Final? Dormindo minutos.: " + str((300*delay)/60)
-			exit()
-			barraProgresso(300*delay)
-			hora=int(time.time())-10800#hora ja -3	
-
-		while True:
-			r = requests.get(link)
-			if r.status_code != 200:
-				print "Erro ao receber pagina: " + str(r.status_code)
-				cont_erros += 1
-				mensagemErro(cont_erros)
-				barraProgresso(500)
-			else:
-				print "	Proxima categoria recebida"
-				break
-
-
-		soup = BeautifulSoup(r.text, 'html.parser')
-		section = soup.findAll("section", {"class": "listagem-box"})
-
-	for _ in range(len(section)):
-
-		b = BeautifulSoup(str(section[_]), 'html.parser')
-		ident = b.findAll('a', href=True)[1]['data-id']
-		titulo = section[_].findAll("a")
-		titulo = titulo[1].text
-
-		valor = section[_].findAll("div", {"class": "listagem-preco"})
-
-		if len(valor) != 0: 
-			valor = valor[0].text 
-			valor = int(valor[3:-3].replace('.',''))
-		else: 
-			valor = section[0].findAll("div", {"class": "listagem-precoavista"})
-			
-			if len(valor) == 0:
-				valor = 666
-			else:
-				valor = valor[0].text
-				valor = int(valor[3:-3].replace('.',''))
-
-		resultado = procuraProduto(ident)
-
-		if len(resultado) == 0:#preenche o banco de dados
-			preencheDB(ident, titulo, valor, valor)
-			#preencheValoresDB(hora, valor, ident)
-			listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
-		else:
-			#preencheValoresDB(hora, valor, ident)
-			listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
 	
-	preencheValoresDB(listaDadosParaDB)#ao final da pagina, passa lista de dados para funcao salvar no banco
-	listaDadosParaDB = []#limpa lista
-	print "Dormindo " + "pag. " + str(num) + " [ " + links[num_lista][24:] + " ]"
-	barraProgresso(delay)
-	num = num + 1
+	if listaProdutos:
+		for _ in listaProdutos:
+
+			ident = _['codigo']
+			titulo = _['nome']
+			valor = _['preco_desconto']
+
+			resultado = procuraProduto(ident)#procura se produto ja existe no banco de dados
+
+			if len(resultado) == 0:#preenche o banco de dados com o novo produto
+				preencheDB(ident, titulo, valor, valor)
+				listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
+			else:
+				listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
+
+
+		preencheValoresDB(listaDadosParaDB)#ao final da pagina, passa lista de dados para funcao salvar no banco
+		listaDadosParaDB = []#limpa lista
+		print "Dormindo " + "pag. " + str(num) + " [ " + links[num_lista][24:] + " ]"
+		barraProgresso(delay)
+		num = num + 1		
+
+	else:
+		num = 1
+		num_lista = num_lista + 1
+
+		
+	
+	
