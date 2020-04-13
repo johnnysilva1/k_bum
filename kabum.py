@@ -9,24 +9,26 @@ import sys
 import json
 import re
 
+def retornaListaComProdutos(soup):
+	index = 0
+	while True:
+		sair = False
+		try:#tenta encontrar algum indice que seja valido
+			listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
+			script = listaComScripts[index] #escolhe o 19a script, ATENCAO! A LISTA DE SCRIPTS PODE MUDAR PARA OUTRA POSICAO
+			m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
+			listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
+			sair = True
+		except:
+			if index > len(listaComScripts):
+				print "Nenhum indice valido foi encontrado"
+				exit()
+			index += 1 #testa proximo indice
+		
+		if sair:
+			break
 
-#CREATE TABLE precoProduto (dataUNIX INTEGER,  valor INTEGER, idProduto   INTEGER NOT NULL,  FOREIGN KEY (idProduto)  REFERENCES produto (idProduto));
-
-#'INSERT INTO precoProduto (dataUNIX, valor, idProduto) VALUES (84108, 84108,84108);
-
-#create table produto (idProduto INTEGER PRIMARY KEY,  titulo VARCHAR(500), maiorValor  INTEGER, menorValor INTEGER);
-#INSERT INTO produto (id, idProduto, titulo, maiorValor, menorValor) VALUES ("POST1", "ZEBUNDA", 50, 10, 0.4, "noticia", "pernambuco", 211215444, "G1", "ze das couves mata traficante");
-#select * from produto WHERE maiorValor != menorValor;
-
-#conn=sqlite3.connect("clientdatabase.db")
-#conn.execute("PRAGMA foreign_keys = 1")//LIBERA PRAGMA
-#cur=conn.cursor()
-
-#UPDATE produto SET maiorValor = (SELECT MAX(valor) FROM precoProduto WHERE precoProduto.idProduto = produto.idProduto);
-
-#INSERT INTO NOVOproduto (idProduto, titulo,  maiorValor, menorValor)  SELECT idProduto, titulo, maiorValor, menorValor FROM produto;
-
-
+	return listaProdutos
 
 def procuraProduto(idProduto):
 	con = sqlite3.connect('dbKabum.db')
@@ -118,9 +120,9 @@ while True:
 		exit()
 
 
-	link = links[num_lista] + str(num) + "&ordem=5&limite=100"
+	link = links[num_lista] + str(num) + "&ordem=5&limite=100"#adiciona o numero da pagina ao link
 
-	while True:
+	while True:#recebe pagina
 		r = requests.get(link)
 		if r.status_code != 200:
 			print "Erro ao receber pagina: " + str(r.status_code)
@@ -132,34 +134,8 @@ while True:
 
 
 	soup = BeautifulSoup(r.text, 'html.parser')
-	listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
-	script = listaComScripts[19] #escolhe o 19a script
-	m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
-	listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
 
-	# #listaProdutos.keys()
-	# avaliacao_nota
-	# disponibilidade
-	# is_openbox
-	# preco_desconto
-	# preco
-	# alt
-	# img
-	# nome
-	# link_descricao
-	# menu
-	# oferta
-	# preco_prime
-	# tem_frete_gratis
-	# brinde
-	# preco_antigo
-	# fabricante
-	# is_marketplace
-	# frete_gratis_somente_prime
-	# botao_marketplace
-	# preco_desconto_prime
-	# codigo
-	# avaliacao_numero
+	listaProdutos = retornaListaComProdutos(soup)#retorna lista de produtos da pagina
 
 	# avaliacao_nota = _['avaliacao_nota']
 	# disponibilidade = _['disponibilidade']
@@ -184,8 +160,7 @@ while True:
 	# codigo = _['codigo']
 	# avaliacao_numero = _['avaliacao_numero']
 
-	#avaliacao_nota, disponibilidade, is_openbox, preco_desconto, preco, alt, img, nome, link_descricao, menu, oferta, preco_prime, 
-	#tem_frete_gratis, brinde, preco_antigo, fabricante, is_marketplace, frete_gratis_somente_prime, botao_marketplace, preco_desconto_prime, codigo, avaliacao_numero,
+	#avaliacao_nota, disponibilidade, is_openbox, preco_desconto, preco, alt, img, nome, link_descricao, menu, oferta, preco_prime,tem_frete_gratis, brinde, preco_antigo, fabricante, is_marketplace, frete_gratis_somente_prime, botao_marketplace, preco_desconto_prime, codigo, avaliacao_numero,
 	#print section[0]
 
 	
