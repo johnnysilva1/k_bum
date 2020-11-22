@@ -8,27 +8,8 @@ import os
 import sys
 import json
 import re
+import logging
 
-def retornaListaComProdutos(soup):
-	index = 0
-	while True:
-		sair = False
-		try:#tenta encontrar algum indice que seja valido
-			listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
-			script = listaComScripts[index] #escolhe o 19a script, ATENCAO! A LISTA DE SCRIPTS PODE MUDAR PARA OUTRA POSICAO
-			m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
-			listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
-			sair = True
-		except:
-			if index > len(listaComScripts):
-				print "Nenhum indice valido foi encontrado"
-				exit()
-			index += 1 #testa proximo indice
-		
-		if sair:
-			break
-
-	return listaProdutos
 
 def procuraProduto(idProduto):
 	con = sqlite3.connect('dbKabum.db')
@@ -38,14 +19,17 @@ def procuraProduto(idProduto):
 	con.close()
 	return resultado
 
-def preencheDB(idProduto, titulo, valorAntigo, novoValor):
-	tup=(idProduto, titulo, valorAntigo, novoValor)
+def preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
+					is_openbox,tem_frete_gratis,link):
+	tup=(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
+					is_openbox,tem_frete_gratis,link)
 	dados=[]
 	dados.append(tup)
 	con = sqlite3.connect('dbKabum.db')
 	con.execute("PRAGMA foreign_keys = 1")
 	c = con.cursor()
-	c.executemany('''INSERT INTO produto (idProduto, titulo, maiorValor, menorValor) VALUES (?, ?, ?, ?)''', dados)
+	c.executemany('''INSERT INTO produto (idProduto, titulo, fabricante, cod_fabricante, disponivel, openbox, freteGratis, link) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', dados)
 	con.commit()
 	con.close()
 
@@ -65,6 +49,28 @@ def preencheValoresDB(listaComValores):
 			c.executemany('''INSERT INTO precoProduto (dataUNIX, valor, idProduto) VALUES (?, ?, ?)''', dados)
 		except sqlite3.Error as e:
 			print("An error occurred:", e.args[0])
+			logging.error("preencheValoresDB	: Ocorreu um erro.", exc_info=True)
+
+
+	con.commit()
+	con.close()
+
+def preencheDisponibilidade(listaDisponibilidade):
+
+	con = sqlite3.connect('dbKabum.db')
+	con.execute("PRAGMA foreign_keys = 1")
+	c = con.cursor()
+
+	for prod in listaDisponibilidade:
+		tup = (prod[1], prod[0])
+		dados=[]
+		dados.append(tup)
+
+		try:
+			c.executemany('''UPDATE produto SET disponivel = ? WHERE idProduto = ?''', dados)
+		except sqlite3.Error as e:
+			print("An error occurred:", e.args[0])
+			logging.error("preencheDisponibilidade	: Ocorreu um erro.", exc_info=True)
 
 	con.commit()
 	con.close()
@@ -72,13 +78,14 @@ def preencheValoresDB(listaComValores):
 
 def mensagemErro(qtdErros):
 	if (qtdErros) >= 10:
-		os.system("Script kabum.py recebeu mais de 10 erros ao tentar download de pagina")
+		os.system("export DISPLAY=:0; Script kabum.py recebeu mais de 10 erros ao tentar download de pagina e foi abortado.")
+		exit()
 
 def mensagemPreco(titulo, valorAntigo, novoValor):
 	if len(titulo) > 80:
 		titulo = titulo[:80]
 
-	os.system("notify-send \"O preco abaixou!\" \" {} abaixou de R$ {} para R$ {}\"".format(titulo,valorAntigo,novoValor))
+	os.system("export DISPLAY=:0; notify-send \"O preco abaixou!\" \" {} abaixou de R$ {} para R$ {}\"".format(titulo,valorAntigo,novoValor))
 
 def barraProgresso(tempo):
 	toolbar_width = 50
@@ -98,44 +105,139 @@ def barraProgresso(tempo):
 	sys.stdout.write("]\n") # this ends the progress bar
 
 
+def recebePagina(link):
+	while True:
+		r = None
+		try:
+			r = requests.get(link)
+			return r
 
-links = ("https://www.kabum.com.br/hardware/ssd-2-5?pagina=",
-		 "https://www.kabum.com.br/computadores/tablets/kindle?pagina=",
-		 "https://www.kabum.com.br/hardware/placa-de-video-vga/nvidia?pagina=",
-		 "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=",
-		 "https://www.kabum.com.br/celular-telefone/smartphones?pagina=")#lembrar de por a ?pagina= ao final do nome
-num = 1 #1
-num_lista = 0 #0
-delay = 30 #tempo minimo entre requisicoes, em segs
-cont_erros = 0
-hora=int(time.time())-10800#hora ja -3
-listaDadosParaDB = []
+		except:
+			if r.status_code != 200:
+				print "Erro ao receber pagina: " + str(r.status_code)
+				logging.error("recebePagina	: Erro ao receber pagina!", exc_info=True)
+				cont_erros += 1
+				mensagemErro(cont_erros)
+				barraProgresso(500)
+			else:
+				logging.error("recebePagina	: Erro catastrofico ao receber pagina!", exc_info=True)
+				print "Erro catastrofico ao receber pagina: " + str(r.status_code)
+				cont_erros += 1
+				mensagemErro(cont_erros)
+				barraProgresso(500)
 
+def retornaListaDeProdutos(soup):
+	index = 0
+	while True:
+		sair = False
+		try:#tenta encontrar algum indice que seja valido
+			listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
+			script = listaComScripts[index] #escolhe o 19a script, ATENCAO! A LISTA DE SCRIPTS PODE MUDAR PARA OUTRA POSICAO
+			m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
+			listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
+			sair = True
+		except:
+			if index > len(listaComScripts):
+				logging.error("retornaListaDeProdutos	: Nenhum indice valido foi encontrado!", exc_info=True)
+				print "Nenhum indice valido foi encontrado."
+				exit()
 
-while True:
-
-	#link = "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=" 
-
-	if num_lista > len(links)-1:#se chegou ao final da lista de links termina programa 
-		exit()
-
-
-	link = links[num_lista] + str(num) + "&ordem=5&limite=100"#adiciona o numero da pagina ao link
-
-	while True:#recebe pagina
-		r = requests.get(link)
-		if r.status_code != 200:
-			print "Erro ao receber pagina: " + str(r.status_code)
-			cont_erros += 1
-			mensagemErro(cont_erros)
-			barraProgresso(500)
-		else: 
+			#print "Indice invalido, testando proximo."
+			index += 1 #testa proximo indice
+		
+		if sair:
+			return listaProdutos
 			break
 
 
-	soup = BeautifulSoup(r.text, 'html.parser')
+def main():
 
-	listaProdutos = retornaListaComProdutos(soup)#retorna lista de produtos da pagina
+	segundos = int(time.time())
+
+	links = ("https://www.kabum.com.br/hardware/ssd-2-5?pagina=",
+			 "https://www.kabum.com.br/computadores/tablets/kindle?pagina=",
+			 "https://www.kabum.com.br/hardware/placa-de-video-vga/nvidia?pagina=",
+			 "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=",
+			 "https://www.kabum.com.br/celular-telefone/smartphones?pagina=")#lembrar de por a ?pagina= ao final do nome
+	num = 1 #1
+	num_lista = 0 #0
+	delay = 5 #tempo minimo entre requisicoes, em segs
+	cont_erros = 0
+	hora=int(time.time())-10800#hora ja -3
+	listaDadosParaDB = []
+	listaDisponibilidade = []
+
+
+	format = "%(asctime)s - %(levelname)s: %(message)s"
+	logging.basicConfig(format=format, level=logging.INFO,
+                        datefmt="%H:%M:%S", filename='/home/johnny/Desktop/Arquivos/kabum.log', filemode='a')
+
+	os.system("export DISPLAY=:0; notify-send -t 2500 \"Escaneando precos kabum\"")
+	logging.info("Main	: programa iniciado!")
+
+	while True:
+
+		#link = "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=" 
+
+		if num_lista > len(links)-1:#se chegou ao final da lista de links termina programa 
+			logging.info("Main	: programa terminado!")
+			tempo_exec = (int(time.time()) - segundos)/60
+			os.system("export DISPLAY=:0; notify-send -t 10000 \"Script kabum.py executado com SUCESSO. {}m\"".
+				format(tempo_exec))
+			exit()
+
+
+		link = links[num_lista] + str(num) + "&ordem=5&limite=100"
+
+		pagina = recebePagina(link)
+		soup = BeautifulSoup(pagina.text, 'html.parser')
+		listaProdutos = retornaListaDeProdutos(soup)
+
+		
+		if listaProdutos:
+			for _ in listaProdutos:
+
+				ident = _['codigo']
+				titulo = _['nome']
+				valor = _['preco_desconto']
+				nome_fabricante = _['fabricante']['nome']
+				cod_fabricante = _['fabricante']['codigo']
+				disponibilidade = _['disponibilidade'] #boolean
+				is_openbox = _['is_openbox'] #boolean
+				tem_frete_gratis = _['tem_frete_gratis'] #boolean
+				#is_marketplace = _['is_marketplace']
+
+				resultado = procuraProduto(ident)#procura se produto ja existe no banco de dados
+
+				if len(resultado) == 0:#preenche o banco de dados com o novo produto
+					preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
+						is_openbox,tem_frete_gratis,link)
+					listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
+				else:
+					listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
+					if disponibilidade != resultado[0][4]: #se a disponibilidade mudou
+						listaDisponibilidade.append([ident, disponibilidade])
+						print ident, titulo, disponibilidade, resultado[0][4]
+
+			preencheValoresDB(listaDadosParaDB)#ao final da pagina, passa lista de dados para funcao salvar no banco
+			listaDadosParaDB = []#limpa lista
+
+			if listaDisponibilidade:
+				preencheDisponibilidade(listaDisponibilidade)
+				listaDisponibilidade = []
+
+			logging.info("Main	: dormindo (pagina recebida: %s)",links[num_lista][24:])
+
+			print "Dormindo " + "pag. " + str(num) + " [ " + links[num_lista][24:] + " ]"
+			barraProgresso(delay)
+			num = num + 1		
+
+		else:
+			num = 1
+			num_lista = num_lista + 1
+
+if __name__ == '__main__':
+    main()
 
 	# avaliacao_nota = _['avaliacao_nota']
 	# disponibilidade = _['disponibilidade']
@@ -163,33 +265,4 @@ while True:
 	#avaliacao_nota, disponibilidade, is_openbox, preco_desconto, preco, alt, img, nome, link_descricao, menu, oferta, preco_prime,tem_frete_gratis, brinde, preco_antigo, fabricante, is_marketplace, frete_gratis_somente_prime, botao_marketplace, preco_desconto_prime, codigo, avaliacao_numero,
 	#print section[0]
 
-	
-	if listaProdutos:
-		for _ in listaProdutos:
-
-			ident = _['codigo']
-			titulo = _['nome']
-			valor = _['preco_desconto']
-
-			resultado = procuraProduto(ident)#procura se produto ja existe no banco de dados
-
-			if len(resultado) == 0:#preenche o banco de dados com o novo produto
-				preencheDB(ident, titulo, valor, valor)
-				listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
-			else:
-				listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
-
-
-		preencheValoresDB(listaDadosParaDB)#ao final da pagina, passa lista de dados para funcao salvar no banco
-		listaDadosParaDB = []#limpa lista
-		print "Dormindo " + "pag. " + str(num) + " [ " + links[num_lista][24:] + " ]"
-		barraProgresso(delay)
-		num = num + 1		
-
-	else:
-		num = 1
-		num_lista = num_lista + 1
-
-		
-	
-	
+	#CREATE TABLE produto (idProduto INTEGER PRIMARY KEY,  titulo VARCHAR(500), fabricante  VARCHAR(500), cod_fabricante INTEGER, disponivel BOOLEAN, openbox BOOLEAN, freteGratis BOOLEAN, link VARCHAR(700))
