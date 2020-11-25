@@ -150,6 +150,50 @@ def retornaListaDeProdutos(soup):
 			break
 
 
+def atualizaPrecos():
+	con = sqlite3.connect('dbKabum.db')
+	c = con.cursor()
+	c.execute("SELECT idProduto FROM produto WHERE disponivel = 1")
+	a = c.fetchall()
+	lista_ids = []
+
+	for _ in a:
+		lista_ids.append(_[0])
+
+	inicio = time.time()
+
+	for produto in lista_ids:
+
+		#media dos ultimos 6 meses
+		# data = time.time() - 60*60*24*30*6
+		# c.execute("select round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
+		# media = c.fetchall()[0][0]
+		# c.execute("UPDATE produto SET media_6_meses = ? WHERE idProduto = ?", (media, produto))
+
+		#media dos ultimos 3 meses
+		# data = time.time() - 60*60*24*30*3
+		# c.execute("select round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
+		# media = c.fetchall()[0][0]
+		# c.execute("UPDATE produto SET media_3_meses = ? WHERE idProduto = ?", (media, produto))
+
+		#media do ultimo mes
+		# data = time.time() - 60*60*24*30*1
+		# c.execute("select round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
+		# media = c.fetchall()[0][0]
+		# c.execute("UPDATE produto SET media_1_mes = ? WHERE idProduto = ?", (media, produto))
+
+		#ultimo valor no db
+		c.execute("select max(dataUNIX) FROM precoProduto where idProduto = ?", (produto,))
+		ultima_data = c.fetchall()[0][0]
+		c.execute("select valor FROM precoProduto where idProduto = ? AND dataUNIX= ?", (produto, ultima_data))
+		valor = c.fetchall()[0][0]
+
+		c.execute("UPDATE produto SET valor_atual = ? WHERE idProduto = ?", (valor, produto))
+
+	con.commit()
+	con.close()
+
+
 def main():
 
 	segundos = int(time.time())
@@ -180,6 +224,7 @@ def main():
 		#link = "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=" 
 
 		if num_lista > len(links)-1:#se chegou ao final da lista de links termina programa 
+			#atualizaPrecos()
 			logging.info("Main	: programa terminado!")
 			tempo_exec = (int(time.time()) - segundos)/60
 			os.system("export DISPLAY=:0; notify-send -t 10000 \"Script kabum.py executado com SUCESSO. {}m\"".
@@ -217,7 +262,6 @@ def main():
 					listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
 					if disponibilidade != resultado[0][4]: #se a disponibilidade mudou
 						listaDisponibilidade.append([ident, disponibilidade])
-						print ident, titulo, disponibilidade, resultado[0][4]
 
 			preencheValoresDB(listaDadosParaDB)#ao final da pagina, passa lista de dados para funcao salvar no banco
 			listaDadosParaDB = []#limpa lista
@@ -266,3 +310,21 @@ if __name__ == '__main__':
 	#print section[0]
 
 	#CREATE TABLE produto (idProduto INTEGER PRIMARY KEY,  titulo VARCHAR(500), fabricante  VARCHAR(500), cod_fabricante INTEGER, disponivel BOOLEAN, openbox BOOLEAN, freteGratis BOOLEAN, link VARCHAR(700))
+	#retorna o id, titulo e precomedio de todos produtos
+	#select d.idProduto, d.titulo, avg(e.valor) FROM precoProduto e, produto d where e.idProduto = d.idProduto AND d.disponivel = 1 group by d.titulo;
+
+	# CREATE TABLE "produto" (
+	# `idProduto`	INTEGER,
+	# `titulo`	VARCHAR(500),
+	# `fabricante`	VARCHAR(500),
+	# `cod_fabricante`	INTEGER,
+	# `disponivel`	BOOLEAN,
+	# `openbox`	BOOLEAN,
+	# `freteGratis`	BOOLEAN,
+	# `link`	VARCHAR(700),
+	# `media_6_meses`	REAL,
+	# `media_3_meses`	REAL,
+	# `media_1_mes`	REAL,
+	# `valor_atual`	REAL,
+	# PRIMARY KEY(idProduto)
+	# )
