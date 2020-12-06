@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+from concurrent.futures import ThreadPoolExecutor
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -105,52 +106,7 @@ def barraProgresso(tempo):
 	sys.stdout.write("]\n") # this ends the progress bar
 
 
-def recebePagina(link):
-	while True:
-		r = None
-		try:
-			r = requests.get(link)
-			return r
-
-		except:
-			if r.status_code != 200:
-				print "Erro ao receber pagina: " + str(r.status_code)
-				logging.error("recebePagina	: Erro ao receber pagina!", exc_info=True)
-				cont_erros += 1
-				mensagemErro(cont_erros)
-				barraProgresso(500)
-			else:
-				logging.error("recebePagina	: Erro catastrofico ao receber pagina!", exc_info=True)
-				print "Erro catastrofico ao receber pagina: " + str(r.status_code)
-				cont_erros += 1
-				mensagemErro(cont_erros)
-				barraProgresso(500)
-
-def retornaListaDeProdutos(soup):
-	index = 0
-	while True:
-		sair = False
-		try:#tenta encontrar algum indice que seja valido
-			listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
-			script = listaComScripts[index] #escolhe o 19a script, ATENCAO! A LISTA DE SCRIPTS PODE MUDAR PARA OUTRA POSICAO
-			m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
-			listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
-			sair = True
-		except:
-			if index > len(listaComScripts):
-				logging.error("retornaListaDeProdutos	: Nenhum indice valido foi encontrado!", exc_info=True)
-				print "Nenhum indice valido foi encontrado."
-				exit()
-
-			#print "Indice invalido, testando proximo."
-			index += 1 #testa proximo indice
-		
-		if sair:
-			return listaProdutos
-			break
-
-
-def atualizaPrecos():
+def atualizaPrecos(ultimoMes = False, tresMeses = False, seisMeses = False):
 	con = sqlite3.connect('dbKabum.db')
 	c = con.cursor()
 	c.execute("SELECT idProduto FROM produto WHERE disponivel = 1")
@@ -164,28 +120,31 @@ def atualizaPrecos():
 
 	for produto in lista_ids:
 
+		if seisMeses:
 		#media dos ultimos 6 meses
-		# data = time.time() - 60*60*24*30*6
-		# c.execute("select round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
-		# media = c.fetchall()[0][0]
-		# c.execute("UPDATE produto SET media_6_meses = ? WHERE idProduto = ?", (media, produto))
+			data = time.time() - 60*60*24*30*6
+			c.execute("SELECT round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
+			media = c.fetchall()[0][0]
+			c.execute("UPDATE produto SET media_6_meses = ? WHERE idProduto = ?", (media, produto))
 
+		if tresMeses:
 		#media dos ultimos 3 meses
-		# data = time.time() - 60*60*24*30*3
-		# c.execute("select round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
-		# media = c.fetchall()[0][0]
-		# c.execute("UPDATE produto SET media_3_meses = ? WHERE idProduto = ?", (media, produto))
+			data = time.time() - 60*60*24*30*3
+			c.execute("SELECT round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
+			media = c.fetchall()[0][0]
+			c.execute("UPDATE produto SET media_3_meses = ? WHERE idProduto = ?", (media, produto))
 
+		if ultimoMes:
 		#media do ultimo mes
-		# data = time.time() - 60*60*24*30*1
-		# c.execute("select round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
-		# media = c.fetchall()[0][0]
-		# c.execute("UPDATE produto SET media_1_mes = ? WHERE idProduto = ?", (media, produto))
+			data = time.time() - 60*60*24*30*1
+			c.execute("SELECT round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
+			media = c.fetchall()[0][0]
+			c.execute("UPDATE produto SET media_1_mes = ? WHERE idProduto = ?", (media, produto))
 
 		#ultimo valor no db
-		c.execute("select max(dataUNIX) FROM precoProduto where idProduto = ?", (produto,))
+		c.execute("SELECT max(dataUNIX) FROM precoProduto where idProduto = ?", (produto,))
 		ultima_data = c.fetchall()[0][0]
-		c.execute("select valor FROM precoProduto where idProduto = ? AND dataUNIX= ?", (produto, ultima_data))
+		c.execute("SELECT valor FROM precoProduto where idProduto = ? AND dataUNIX= ?", (produto, ultima_data))
 		valor = c.fetchall()[0][0]
 
 		c.execute("UPDATE produto SET valor_atual = ? WHERE idProduto = ?", (valor, produto))
@@ -194,137 +153,171 @@ def atualizaPrecos():
 	con.close()
 
 
+def recebePagina(url): #recebe url e retorna pagina
+
+	try:
+		r = requests.get(url)	
+		#r.raise_for_status()
+		return r.text
+
+	except requests.exceptions.RequestException as e:
+		logging.error("recebePagina	: Erro ao receber pagina!", exc_info=True)
+		print "Erro ao receber pagina: " + str(e)
+		return e
+
+
+def retornaListaDeProdutos(soup):
+	index = 0
+	while True:
+		sair = False
+		try:#tenta encontrar algum indice que seja valido
+			listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
+			script = listaComScripts[index] #escolhe o 19a script, ATENCAO! A LISTA DE SCRIPTS PODE MUDAR PARA OUTRA POSICAO
+			m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
+			listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
+			sair = True
+		except:
+			if index > len(listaComScripts):
+				#logging.error("retornaListaDeProdutos	: Nenhum indice valido foi encontrado!", exc_info=True)
+				print "Nenhum indice valido foi encontrado."
+				return None
+				exit()
+
+			#print "Indice invalido, testando proximo."
+			index += 1 #testa proximo indice
+		
+		if sair:
+			return listaProdutos
+			break
+
+def retornaProdutosDaCategoria(url): #recebe categoria e retorna todas paginas
+
+	listaDeProdutos = list()
+	num_pagina = 1
+	chegouAoFinal = False
+	timeout = 5
+
+	while not chegouAoFinal:
+
+		endereco = url + "?pagina=" + str(num_pagina) + "&ordem=5&limite=100"
+
+		#! tratar erro caso haja algum problema de rede, dns, acesso etc
+		htmlDaPagina = recebePagina(endereco)
+
+		soup = BeautifulSoup(htmlDaPagina, 'html.parser')
+		produtosDaPagina = retornaListaDeProdutos(soup)
+
+		if produtosDaPagina:
+
+			for _ in produtosDaPagina:#adiciona os dicionarios na list
+				listaDeProdutos.append(_)
+
+			num_pagina += 1
+			time.sleep(timeout)
+
+		else:
+			chegouAoFinal = True
+
+	return listaDeProdutos
+
+
+def recebeTodosProdutos(urls):
+	"""
+	Cria a pool e passa as urls
+	"""
+
+	futures_list = []
+	results = []
+
+	with ThreadPoolExecutor(max_workers=2) as executor:
+		for url in urls:
+			futures = executor.submit(retornaProdutosDaCategoria, url)
+			futures_list.append(futures)
+
+		#print "loop de futuros"
+		
+		for future in futures_list:
+			try:
+				result = future.result(timeout=60)
+				results.append(result)
+			except Exception as t:
+				results.append(t)
+	return results
+
+
 def main():
 
+	os.system("export DISPLAY=:0; notify-send -t 2500 \"Escaneando precos kabum\"")
+	logging.info("Main	: programa iniciado!")
 	segundos = int(time.time())
 
-	links = ("https://www.kabum.com.br/hardware/ssd-2-5?pagina=",
-			 "https://www.kabum.com.br/computadores/tablets/kindle?pagina=",
-			 "https://www.kabum.com.br/hardware/placa-de-video-vga/nvidia?pagina=",
-			 "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=",
-			 "https://www.kabum.com.br/celular-telefone/smartphones?pagina=")#lembrar de por a ?pagina= ao final do nome
-	num = 1 #1
-	num_lista = 0 #0
-	delay = 5 #tempo minimo entre requisicoes, em segs
-	cont_erros = 0
+	links = ("https://www.kabum.com.br/hardware/ssd-2-5",
+			 "https://www.kabum.com.br/computadores/tablets/kindle",
+			 "https://www.kabum.com.br/hardware/placa-de-video-vga/nvidia",
+			 "https://www.kabum.com.br/hardware/disco-rigido-hd",
+			 "https://www.kabum.com.br/celular-telefone/smartphones")
+
+	links = ("https://www.kabum.com.br/hardware/ssd-2-5",
+		 "https://www.kabum.com.br/computadores/tablets/kindle")
+
 	hora=int(time.time())-10800#hora ja -3
 	listaDadosParaDB = []
 	listaDisponibilidade = []
 
-
 	format = "%(asctime)s - %(levelname)s: %(message)s"
+	DESTINO_LOG = './kabum.log'
 	logging.basicConfig(format=format, level=logging.INFO,
-                        datefmt="%H:%M:%S", filename='/home/johnny/Desktop/Arquivos/kabum.log', filemode='a')
+                        datefmt="%d-%m %H:%M:%S", filename=DESTINO_LOG, filemode='a')
 
-	os.system("export DISPLAY=:0; notify-send -t 2500 \"Escaneando precos kabum\"")
-	logging.info("Main	: programa iniciado!")
-
-	while True:
-
-		#link = "https://www.kabum.com.br/hardware/disco-rigido-hd?ordem=5&limite=100&pagina=" 
-
-		if num_lista > len(links)-1:#se chegou ao final da lista de links termina programa 
-			#atualizaPrecos()
-			logging.info("Main	: programa terminado!")
-			tempo_exec = (int(time.time()) - segundos)/60
-			os.system("export DISPLAY=:0; notify-send -t 10000 \"Script kabum.py executado com SUCESSO. {}m\"".
-				format(tempo_exec))
-			exit()
+	"""
+	Passa links para pool receber todas paginas
+	"""
+	resultados = recebeTodosProdutos(links)
 
 
-		link = links[num_lista] + str(num) + "&ordem=5&limite=100"
 
-		pagina = recebePagina(link)
-		soup = BeautifulSoup(pagina.text, 'html.parser')
-		listaProdutos = retornaListaDeProdutos(soup)
+	for resultado in resultados:
+		#print "Numero total de produtos na categoria: " + str(len(resultado))
 
-		
-		if listaProdutos:
-			for _ in listaProdutos:
+		for _ in resultado:
 
-				ident = _['codigo']
-				titulo = _['nome']
-				valor = _['preco_desconto']
-				nome_fabricante = _['fabricante']['nome']
-				cod_fabricante = _['fabricante']['codigo']
-				disponibilidade = _['disponibilidade'] #boolean
-				is_openbox = _['is_openbox'] #boolean
-				tem_frete_gratis = _['tem_frete_gratis'] #boolean
-				#is_marketplace = _['is_marketplace']
+			ident = _['codigo']
+			titulo = _['nome']
+			valor = _['preco_desconto']
+			nome_fabricante = _['fabricante']['nome']
+			cod_fabricante = _['fabricante']['codigo']
+			disponibilidade = _['disponibilidade'] #boolean
+			is_openbox = _['is_openbox'] #boolean
+			tem_frete_gratis = _['tem_frete_gratis'] #boolean
+			#is_marketplace = _['is_marketplace']
 
-				resultado = procuraProduto(ident)#procura se produto ja existe no banco de dados
+			pesquisa = procuraProduto(ident)#procura se produto ja existe no banco de dados
 
-				if len(resultado) == 0:#preenche o banco de dados com o novo produto
-					preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
-						is_openbox,tem_frete_gratis,link)
-					listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
-				else:
-					listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
-					if disponibilidade != resultado[0][4]: #se a disponibilidade mudou
-						listaDisponibilidade.append([ident, disponibilidade])
+			if len(pesquisa) == 0:#se o prod nao existir preenche o banco de dados com o novo produto
+				
+				preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
+					is_openbox,tem_frete_gratis,link)
+				listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
+			
+			else:
 
-			preencheValoresDB(listaDadosParaDB)#ao final da pagina, passa lista de dados para funcao salvar no banco
-			listaDadosParaDB = []#limpa lista
+				listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
+				if disponibilidade != pesquisa[0][4]: #se a disponibilidade mudou
+					listaDisponibilidade.append([ident, disponibilidade])
 
-			if listaDisponibilidade:
-				preencheDisponibilidade(listaDisponibilidade)
-				listaDisponibilidade = []
+		preencheValoresDB(listaDadosParaDB)#ao final da categoria, passa lista de dados para funcao salvar no banco
+		listaDadosParaDB = []#limpa lista
 
-			logging.info("Main	: dormindo (pagina recebida: %s)",links[num_lista][24:])
+		if listaDisponibilidade:
+			preencheDisponibilidade(listaDisponibilidade)
+			listaDisponibilidade = []
 
-			print "Dormindo " + "pag. " + str(num) + " [ " + links[num_lista][24:] + " ]"
-			barraProgresso(delay)
-			num = num + 1		
 
-		else:
-			num = 1
-			num_lista = num_lista + 1
+	logging.info("Main	: programa terminado!")
+	tempo_exec = (int(time.time()) - segundos)/60
+	os.system("export DISPLAY=:0; notify-send -t 10000 \"Script kabum.py executado com SUCESSO. {}m\"".
+		format(tempo_exec))
+
 
 if __name__ == '__main__':
     main()
-
-	# avaliacao_nota = _['avaliacao_nota']
-	# disponibilidade = _['disponibilidade']
-	# is_openbox = _['is_openbox']
-	# preco_desconto = _['preco_desconto']
-	# preco = _['preco']
-	# alt = _['alt']
-	# img = _['img']
-	# nome = _['nome']
-	# link_descricao = _['link_descricao']
-	# menu = _['menu']
-	# oferta = _['oferta']
-	# preco_prime = _['preco_prime']
-	# tem_frete_gratis = _['tem_frete_gratis']
-	# brinde = _['brinde']
-	# preco_antigo = _['preco_antigo']
-	# fabricante = _['fabricante']
-	# is_marketplace = _['is_marketplace']
-	# frete_gratis_somente_prime = _['frete_gratis_somente_prime']
-	# botao_marketplace = _['botao_marketplace']
-	# preco_desconto_prime = _['preco_desconto_prime']
-	# codigo = _['codigo']
-	# avaliacao_numero = _['avaliacao_numero']
-
-	#avaliacao_nota, disponibilidade, is_openbox, preco_desconto, preco, alt, img, nome, link_descricao, menu, oferta, preco_prime,tem_frete_gratis, brinde, preco_antigo, fabricante, is_marketplace, frete_gratis_somente_prime, botao_marketplace, preco_desconto_prime, codigo, avaliacao_numero,
-	#print section[0]
-
-	#CREATE TABLE produto (idProduto INTEGER PRIMARY KEY,  titulo VARCHAR(500), fabricante  VARCHAR(500), cod_fabricante INTEGER, disponivel BOOLEAN, openbox BOOLEAN, freteGratis BOOLEAN, link VARCHAR(700))
-	#retorna o id, titulo e precomedio de todos produtos
-	#select d.idProduto, d.titulo, avg(e.valor) FROM precoProduto e, produto d where e.idProduto = d.idProduto AND d.disponivel = 1 group by d.titulo;
-
-	# CREATE TABLE "produto" (
-	# `idProduto`	INTEGER,
-	# `titulo`	VARCHAR(500),
-	# `fabricante`	VARCHAR(500),
-	# `cod_fabricante`	INTEGER,
-	# `disponivel`	BOOLEAN,
-	# `openbox`	BOOLEAN,
-	# `freteGratis`	BOOLEAN,
-	# `link`	VARCHAR(700),
-	# `media_6_meses`	REAL,
-	# `media_3_meses`	REAL,
-	# `media_1_mes`	REAL,
-	# `valor_atual`	REAL,
-	# PRIMARY KEY(idProduto)
-	# )
