@@ -4,77 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 from bs4 import BeautifulSoup
 import time
-import sqlite3
 import os
 import sys
 import json
 import re
 import logging
 
-
-def procuraProduto(idProduto):
-	con = sqlite3.connect('dbKabum.db')
-	c = con.cursor()
-	c.execute("SELECT * FROM produto WHERE idProduto = \"%s\"" %idProduto)
-	resultado = c.fetchall()
-	con.close()
-	return resultado
-
-def preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
-					is_openbox,tem_frete_gratis,link):
-	tup=(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
-					is_openbox,tem_frete_gratis,link)
-	dados=[]
-	dados.append(tup)
-	con = sqlite3.connect('dbKabum.db')
-	con.execute("PRAGMA foreign_keys = 1")
-	c = con.cursor()
-	c.executemany('''INSERT INTO produto (idProduto, titulo, fabricante, cod_fabricante, disponivel, openbox, freteGratis, link) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', dados)
-	con.commit()
-	con.close()
-
-def preencheValoresDB(listaComValores):
-	
-	con = sqlite3.connect('dbKabum.db')
-	con.execute("PRAGMA foreign_keys = 1")
-	c = con.cursor()
-
-	for prod in listaComValores:
-
-		tup=(prod[0], prod[1], prod[2])
-		dados=[]
-		dados.append(tup)
-
-		try:
-			c.executemany('''INSERT INTO precoProduto (dataUNIX, valor, idProduto) VALUES (?, ?, ?)''', dados)
-		except sqlite3.Error as e:
-			print("An error occurred:", e.args[0])
-			logging.error("preencheValoresDB	: Ocorreu um erro.", exc_info=True)
-
-
-	con.commit()
-	con.close()
-
-def preencheDisponibilidade(listaDisponibilidade):
-
-	con = sqlite3.connect('dbKabum.db')
-	con.execute("PRAGMA foreign_keys = 1")
-	c = con.cursor()
-
-	for prod in listaDisponibilidade:
-		tup = (prod[1], prod[0])
-		dados=[]
-		dados.append(tup)
-
-		try:
-			c.executemany('''UPDATE produto SET disponivel = ? WHERE idProduto = ?''', dados)
-		except sqlite3.Error as e:
-			print("An error occurred:", e.args[0])
-			logging.error("preencheDisponibilidade	: Ocorreu um erro.", exc_info=True)
-
-	con.commit()
-	con.close()
+from db_kabum import DB_Kabum
 
 
 def mensagemErro(qtdErros):
@@ -105,52 +41,6 @@ def barraProgresso(tempo):
 
 	sys.stdout.write("]\n") # this ends the progress bar
 
-
-def atualizaPrecos(ultimoMes = False, tresMeses = False, seisMeses = False):
-	con = sqlite3.connect('dbKabum.db')
-	c = con.cursor()
-	c.execute("SELECT idProduto FROM produto WHERE disponivel = 1")
-	a = c.fetchall()
-	lista_ids = []
-
-	for _ in a:
-		lista_ids.append(_[0])
-
-	inicio = time.time()
-
-	for produto in lista_ids:
-
-		if seisMeses:
-		#media dos ultimos 6 meses
-			data = time.time() - 60*60*24*30*6
-			c.execute("SELECT round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
-			media = c.fetchall()[0][0]
-			c.execute("UPDATE produto SET media_6_meses = ? WHERE idProduto = ?", (media, produto))
-
-		if tresMeses:
-		#media dos ultimos 3 meses
-			data = time.time() - 60*60*24*30*3
-			c.execute("SELECT round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
-			media = c.fetchall()[0][0]
-			c.execute("UPDATE produto SET media_3_meses = ? WHERE idProduto = ?", (media, produto))
-
-		if ultimoMes:
-		#media do ultimo mes
-			data = time.time() - 60*60*24*30*1
-			c.execute("SELECT round(avg(valor),2) FROM precoProduto where idProduto = ? and dataUNIX >= ?", (produto, data))
-			media = c.fetchall()[0][0]
-			c.execute("UPDATE produto SET media_1_mes = ? WHERE idProduto = ?", (media, produto))
-
-		#ultimo valor no db
-		c.execute("SELECT max(dataUNIX) FROM precoProduto where idProduto = ?", (produto,))
-		ultima_data = c.fetchall()[0][0]
-		c.execute("SELECT valor FROM precoProduto where idProduto = ? AND dataUNIX= ?", (produto, ultima_data))
-		valor = c.fetchall()[0][0]
-
-		c.execute("UPDATE produto SET valor_atual = ? WHERE idProduto = ?", (valor, produto))
-
-	con.commit()
-	con.close()
 
 
 def recebePagina(url): #recebe url e retorna pagina
@@ -248,7 +138,6 @@ def recebeTodosProdutos(urls):
 def main():
 
 	os.system("export DISPLAY=:0; notify-send -t 2500 \"Escaneando precos kabum\"")
-	logging.info("Main	: programa iniciado!")
 	segundos = int(time.time())
 
 	links = ("https://www.kabum.com.br/hardware/ssd-2-5",
@@ -257,7 +146,7 @@ def main():
 			 "https://www.kabum.com.br/hardware/disco-rigido-hd",
 			 "https://www.kabum.com.br/celular-telefone/smartphones")
 
-	links = ("https://www.kabum.com.br/hardware/ssd-2-5",
+	links = ("https://www.kabum.com.br/eletronicos/calculadoras",
 		 "https://www.kabum.com.br/computadores/tablets/kindle")
 
 	hora=int(time.time())-10800#hora ja -3
@@ -268,6 +157,10 @@ def main():
 	DESTINO_LOG = './kabum.log'
 	logging.basicConfig(format=format, level=logging.INFO,
                         datefmt="%d-%m %H:%M:%S", filename=DESTINO_LOG, filemode='a')
+	logging.info("Main	: programa iniciado!")
+	NOME_DB = "dbKabum.db"
+	DB = DB_Kabum(NOME_DB)
+
 
 	"""
 	Passa links para pool receber todas paginas
@@ -276,7 +169,7 @@ def main():
 
 
 
-	for resultado in resultados:
+	for indice, resultado in enumerate(resultados):
 		#print "Numero total de produtos na categoria: " + str(len(resultado))
 
 		for _ in resultado:
@@ -289,13 +182,14 @@ def main():
 			disponibilidade = _['disponibilidade'] #boolean
 			is_openbox = _['is_openbox'] #boolean
 			tem_frete_gratis = _['tem_frete_gratis'] #boolean
+			link = links[indice]
 			#is_marketplace = _['is_marketplace']
 
-			pesquisa = procuraProduto(ident)#procura se produto ja existe no banco de dados
+			pesquisa = DB.procuraProduto(ident)#procura se produto ja existe no banco de dados
 
 			if len(pesquisa) == 0:#se o prod nao existir preenche o banco de dados com o novo produto
 				
-				preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
+				DB.preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
 					is_openbox,tem_frete_gratis,link)
 				listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
 			
@@ -305,11 +199,11 @@ def main():
 				if disponibilidade != pesquisa[0][4]: #se a disponibilidade mudou
 					listaDisponibilidade.append([ident, disponibilidade])
 
-		preencheValoresDB(listaDadosParaDB)#ao final da categoria, passa lista de dados para funcao salvar no banco
+		DB.preencheValoresDB(listaDadosParaDB)#ao final da categoria, passa lista de dados para funcao salvar no banco
 		listaDadosParaDB = []#limpa lista
 
 		if listaDisponibilidade:
-			preencheDisponibilidade(listaDisponibilidade)
+			DB.preencheDisponibilidade(listaDisponibilidade)
 			listaDisponibilidade = []
 
 
