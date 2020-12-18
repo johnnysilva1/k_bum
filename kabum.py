@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import requests
 from bs4 import BeautifulSoup
 import time
@@ -9,209 +10,235 @@ import sys
 import json
 import re
 import logging
-
 from db_kabum import DB_Kabum
 
 
-def mensagemErro(qtdErros):
-	if (qtdErros) >= 10:
-		os.system("export DISPLAY=:0; Script kabum.py recebeu mais de 10 erros ao tentar download de pagina e foi abortado.")
-		exit()
+class Bot_Kabum:
+    def __init__(self, NOME_DB, DESTINO_LOG, LINKS):
 
-def mensagemPreco(titulo, valorAntigo, novoValor):
-	if len(titulo) > 80:
-		titulo = titulo[:80]
+        format = "%(asctime)s - %(levelname)s: %(message)s"
+        logging.basicConfig(
+            format=format,
+            level=logging.ERROR,
+            datefmt="%d-%m %H:%M:%S",
+            filename=DESTINO_LOG,
+            filemode="a",
+        )
+        logging.info(
+            "__init__ " + threading.currentThread().getName(), threading.currentThread()
+        )
+        self.NOME_DB = NOME_DB
+        self.DESTINO_LOG = DESTINO_LOG
+        self.LINKS = LINKS
 
-	os.system("export DISPLAY=:0; notify-send \"O preco abaixou!\" \" {} abaixou de R$ {} para R$ {}\"".format(titulo,valorAntigo,novoValor))
+        if not isinstance(LINKS, list):
+            logging.error("Os links devem estar em uma lista")
+            raise AttributeError
 
-def barraProgresso(tempo):
-	toolbar_width = 50
-	tempo = tempo/50.0
+        self.NUM_TRABALHADORES = 2 if len(LINKS) > 1 else 1
+        # delay entre requisicoes dos trabalhadores
+        self.DELAY = 10
+        self.STATUS = {"cod": 0, "msg": "esperando"}
 
-	# setup toolbar
-	sys.stdout.write("[%s]" % (" " * toolbar_width))
-	sys.stdout.flush()
-	sys.stdout.write("\b" * (toolbar_width+1)) # return to start of line, after '['
+    @staticmethod
+    def recebePagina(url):
+        try:
+            r = requests.get(url)
+            # r.raise_for_status()
+            return r.text
 
-	for i in xrange(toolbar_width):
-	    time.sleep(tempo) # do real work here
-	    # update the bar
-	    sys.stdout.write("-")
-	    sys.stdout.flush()
+        except requests.exceptions.RequestException as e:
+            logging.error("recebePagina	: Erro ao receber pagina!", exc_info=True)
+            print("Erro ao receber pagina: " + str(e))
+            return e
 
-	sys.stdout.write("]\n") # this ends the progress bar
+    @staticmethod
+    def retornaListaDeProdutos(html):
+        m = re.search("(?:listagemDados\s=)(\s\[(.*?)\])", html)
+        if m:
+            return json.loads(m[1])
+        else:
+            logging.error("Nao foi possivel fazer o parse da pagina")
+            return False
 
+    def statusAtual(self):
+        return self.STATUS
 
+    def barraProgresso(tempo):
+        toolbar_width = 50
+        tempo = tempo / 50.0
 
-def recebePagina(url): #recebe url e retorna pagina
+        # setup toolbar
+        sys.stdout.write("[%s]" % (" " * toolbar_width))
+        sys.stdout.flush()
+        sys.stdout.write("\b" * (toolbar_width + 1))
 
-	try:
-		r = requests.get(url)	
-		#r.raise_for_status()
-		return r.text
+        for i in xrange(toolbar_width):
+            time.sleep(tempo)
+            # update the bar
+            sys.stdout.write("-")
+            sys.stdout.flush()
 
-	except requests.exceptions.RequestException as e:
-		logging.error("recebePagina	: Erro ao receber pagina!", exc_info=True)
-		print "Erro ao receber pagina: " + str(e)
-		return e
+        sys.stdout.write("]\n")
 
+    # recebe categoria e retorna todas paginas
+    def retornaProdutosDaCategoria(self, url, delay_entre_requisicoes):
 
-def retornaListaDeProdutos(soup):
-	index = 0
-	while True:
-		sair = False
-		try:#tenta encontrar algum indice que seja valido
-			listaComScripts = soup.findAll('script')#valores estao dentro de uma constante em um js
-			script = listaComScripts[index] #escolhe o 19a script, ATENCAO! A LISTA DE SCRIPTS PODE MUDAR PARA OUTRA POSICAO
-			m = re.search('listagemDados = \[(.*?)\]', script.encode('utf-8'))#usa regex para retirar porcao da constante com os valores
-			listaProdutos = json.loads(m.group(0)[16:])#converte string para lista
-			sair = True
-		except:
-			if index > len(listaComScripts):
-				#logging.error("retornaListaDeProdutos	: Nenhum indice valido foi encontrado!", exc_info=True)
-				print "Nenhum indice valido foi encontrado."
-				return None
-				exit()
+        listaDeProdutos = list()
+        num_pagina = 1
+        chegouAoFinal = False
 
-			#print "Indice invalido, testando proximo."
-			index += 1 #testa proximo indice
-		
-		if sair:
-			return listaProdutos
-			break
+        while not chegouAoFinal:
+            endereco = url + "?pagina=" + str(num_pagina) + "&ordem=5&limite=100"
 
-def retornaProdutosDaCategoria(url): #recebe categoria e retorna todas paginas
+            # !tratar erro caso haja algum problema de rede, dns, acesso etc
+            htmlDaPagina = self.recebePagina(endereco)
+            produtosDaPagina = self.retornaListaDeProdutos(htmlDaPagina)
 
-	listaDeProdutos = list()
-	num_pagina = 1
-	chegouAoFinal = False
-	timeout = 5
+            if produtosDaPagina:
+                # adiciona os dicionarios na list
+                for produto in produtosDaPagina:
+                    listaDeProdutos.append(produto)
 
-	while not chegouAoFinal:
+                num_pagina += 1
+                time.sleep(self.DELAY)
+            else:
+                chegouAoFinal = True
 
-		endereco = url + "?pagina=" + str(num_pagina) + "&ordem=5&limite=100"
+        return listaDeProdutos
 
-		#! tratar erro caso haja algum problema de rede, dns, acesso etc
-		htmlDaPagina = recebePagina(endereco)
+    def recebeTodosProdutos(self):
+        """
+        Cria a pool e passa as urls
+        """
+        urls = self.LINKS
 
-		soup = BeautifulSoup(htmlDaPagina, 'html.parser')
-		produtosDaPagina = retornaListaDeProdutos(soup)
+        futures_list = []
+        results = []
 
-		if produtosDaPagina:
+        self.STATUS = {"cod": 1, "msg": "recebendo paginas"}
 
-			for _ in produtosDaPagina:#adiciona os dicionarios na list
-				listaDeProdutos.append(_)
+        with ThreadPoolExecutor(max_workers=self.NUM_TRABALHADORES) as executor:
+            for url in urls:
+                futures = executor.submit(
+                    self.retornaProdutosDaCategoria, url, self.DELAY
+                )
+                futures_list.append(futures)
 
-			num_pagina += 1
-			time.sleep(timeout)
+            for future in futures_list:
+                try:
+                    result = future.result(timeout=60)
+                    results.append(result)
+                except Exception as t:
+                    logging.error("Erro no futuro")
+                    print("Erro no futuro")
 
-		else:
-			chegouAoFinal = True
+        self.STATUS = {"cod": 2, "msg": "paginas recebidas"}
+        return results
 
-	return listaDeProdutos
+    def processaResultado(self, produto, indice, hora):
 
+        dadosParaDB = None
+        dadosDisponibilidade = None
+        ident = produto["codigo"]
+        titulo = produto["nome"]
+        valor = produto["preco_desconto"]
+        nome_fabricante = produto["fabricante"]["nome"]
+        cod_fabricante = produto["fabricante"]["codigo"]
+        disponibilidade = produto["disponibilidade"]
+        is_openbox = produto["is_openbox"]
+        tem_frete_gratis = produto["tem_frete_gratis"]
+        link = self.LINKS[indice]
+        # procura se produto ja existe no banco de dados
+        pesquisa = self.DB.procuraProduto(ident)
 
-def recebeTodosProdutos(urls):
-	"""
-	Cria a pool e passa as urls
-	"""
+        # se o prod nao existir preenche o banco de dados com o novo produto
+        if len(pesquisa) == 0:
+            self.DB.preencheDB(
+                ident,
+                titulo,
+                nome_fabricante,
+                cod_fabricante,
+                disponibilidade,
+                is_openbox,
+                tem_frete_gratis,
+                link,
+            )
+            dadosParaDB = [hora, valor, ident]
 
-	futures_list = []
-	results = []
+        else:
 
-	with ThreadPoolExecutor(max_workers=2) as executor:
-		for url in urls:
-			futures = executor.submit(retornaProdutosDaCategoria, url)
-			futures_list.append(futures)
+            dadosParaDB = [hora, valor, ident]
+            # se a disponibilidade mudo
+            if disponibilidade != pesquisa[0][4]:
+                dadosDisponibilidade = [ident, disponibilidade]
 
-		#print "loop de futuros"
-		
-		for future in futures_list:
-			try:
-				result = future.result(timeout=60)
-				results.append(result)
-			except Exception as t:
-				results.append(t)
-	return results
+        return dadosParaDB, dadosDisponibilidade
+
+    def iniciaBot(self):
+        mensagem = "Escaneando precos kabum"
+        os.system('export DISPLAY=:0; notify-send -t 2500 "{}"'.format(mensagem))
+        segundos = int(time.time())
+        logging.info("iniciaBot	: programa iniciado!")
+        # 10800 = 3h*60m*60s
+        hora = int(time.time()) - 10800
+        logging.info(
+            "inciaBot " + threading.currentThread().getName(), threading.currentThread()
+        )
+
+        # cria o acesso ao DB aqui usando a mesma thread id da thread principal
+        self.DB = DB_Kabum(self.NOME_DB)
+
+        """
+		Passa links para pool receber todas paginas
+		"""
+        resultados = self.recebeTodosProdutos()
+        # acumula todos os precos, para ao final salvar no DB
+        listaDadosParaDB = list()
+        # acumula todas mudancas de disponiblidade e ao final atualiza o DB
+        listaDisponibilidade = list()
+
+        for indice, resultado in enumerate(resultados):
+            for _ in resultado:
+                preco, disponibilidade = self.processaResultado(_, indice, hora)
+                listaDadosParaDB.append(preco)
+                if disponibilidade:
+                    listaDisponibilidade.append(disponibilidade)
+        # ao final da categoria, passa lista de dados para funcao salvar no banco
+        self.DB.preencheValoresDB(listaDadosParaDB)
+
+        if listaDisponibilidade:
+            self.DB.preencheDisponibilidade(listaDisponibilidade)
+
+        logging.info("iniciaBot	: programa terminado!")
+        tempo_exec = (int(time.time()) - segundos) / 60
+        self.STATUS = {"cod": 3, "msg": str(int(time.time()) - segundos)}
+        logging.info("Tempo total " + str(int(time.time()) - segundos) + "s")
+        mensagem = "Script kabum.py executado com SUCESSO."
+        os.system(
+            'export DISPLAY=:0; notify-send -t 10000 "{} {}m"'.format(
+                mensagem, tempo_exec
+            )
+        )
 
 
 def main():
+    links = [
+        "https://www.kabum.com.br/hardware/ssd-2-5",
+        "https://www.kabum.com.br/computadores/tablets/kindle",
+        "https://www.kabum.com.br/hardware/placa-de-video-vga/nvidia",
+        "https://www.kabum.com.br/hardware/disco-rigido-hd",
+        "https://www.kabum.com.br/celular-telefone/smartphones",
+    ]
 
-	os.system("export DISPLAY=:0; notify-send -t 2500 \"Escaneando precos kabum\"")
-	segundos = int(time.time())
+    links = ["https://www.kabum.com.br/eletronicos/calculadoras"]
+    kabum = Bot_Kabum(NOME_DB="DELETA.db", DESTINO_LOG="./kabum.log", LINKS=links)
+    kabum.iniciaBot()
 
-	links = ("https://www.kabum.com.br/hardware/ssd-2-5",
-			 "https://www.kabum.com.br/computadores/tablets/kindle",
-			 "https://www.kabum.com.br/hardware/placa-de-video-vga/nvidia",
-			 "https://www.kabum.com.br/hardware/disco-rigido-hd",
-			 "https://www.kabum.com.br/celular-telefone/smartphones")
-
-	links = ("https://www.kabum.com.br/eletronicos/calculadoras",
-		 "https://www.kabum.com.br/computadores/tablets/kindle")
-
-	hora=int(time.time())-10800#hora ja -3
-	listaDadosParaDB = []
-	listaDisponibilidade = []
-
-	format = "%(asctime)s - %(levelname)s: %(message)s"
-	DESTINO_LOG = './kabum.log'
-	logging.basicConfig(format=format, level=logging.INFO,
-                        datefmt="%d-%m %H:%M:%S", filename=DESTINO_LOG, filemode='a')
-	logging.info("Main	: programa iniciado!")
-	NOME_DB = "dbKabum.db"
-	DB = DB_Kabum(NOME_DB)
+    # t = threading.Thread(target=kabum.iniciaBot,name='iniciaOBOT', daemon=False)
+    # t.start()
+    # print ("main " + threading.currentThread().getName())
 
 
-	"""
-	Passa links para pool receber todas paginas
-	"""
-	resultados = recebeTodosProdutos(links)
-
-
-
-	for indice, resultado in enumerate(resultados):
-		#print "Numero total de produtos na categoria: " + str(len(resultado))
-
-		for _ in resultado:
-
-			ident = _['codigo']
-			titulo = _['nome']
-			valor = _['preco_desconto']
-			nome_fabricante = _['fabricante']['nome']
-			cod_fabricante = _['fabricante']['codigo']
-			disponibilidade = _['disponibilidade'] #boolean
-			is_openbox = _['is_openbox'] #boolean
-			tem_frete_gratis = _['tem_frete_gratis'] #boolean
-			link = links[indice]
-			#is_marketplace = _['is_marketplace']
-
-			pesquisa = DB.procuraProduto(ident)#procura se produto ja existe no banco de dados
-
-			if len(pesquisa) == 0:#se o prod nao existir preenche o banco de dados com o novo produto
-				
-				DB.preencheDB(ident, titulo, nome_fabricante, cod_fabricante, disponibilidade, 
-					is_openbox,tem_frete_gratis,link)
-				listaDadosParaDB.append([hora, valor, ident])#armazena valores em lista temporaria
-			
-			else:
-
-				listaDadosParaDB.append([hora, valor, ident])#adiciona valores em lista temporaria
-				if disponibilidade != pesquisa[0][4]: #se a disponibilidade mudou
-					listaDisponibilidade.append([ident, disponibilidade])
-
-		DB.preencheValoresDB(listaDadosParaDB)#ao final da categoria, passa lista de dados para funcao salvar no banco
-		listaDadosParaDB = []#limpa lista
-
-		if listaDisponibilidade:
-			DB.preencheDisponibilidade(listaDisponibilidade)
-			listaDisponibilidade = []
-
-
-	logging.info("Main	: programa terminado!")
-	tempo_exec = (int(time.time()) - segundos)/60
-	os.system("export DISPLAY=:0; notify-send -t 10000 \"Script kabum.py executado com SUCESSO. {}m\"".
-		format(tempo_exec))
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
